@@ -267,6 +267,9 @@ app.post('/stocks/buy', async (req, res) => {
   }
 });
 
+app.get('/favicon.ico', (req, res) => res.status(204));
+
+
 // Start Express Server
 app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
