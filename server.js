@@ -5,7 +5,7 @@ import dotenv from "dotenv";
 import cors from "cors";
 dotenv.config();
 
-app.use(cors());
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const prisma = new PrismaClient({
@@ -18,7 +18,7 @@ let socket = new WebSocket(`${FINNHUB_WS_URL}?token=${API_KEY}`);
 
 
 app.use(express.json());
-
+app.use(cors());
 
 const subscriptions = new Map();
 const liveStockData = new Map();
