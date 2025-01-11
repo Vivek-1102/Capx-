@@ -10,22 +10,17 @@ const prisma = new PrismaClient({
   log: ['query', 'info', 'warn', 'error'],
 });
 
-// WebSocket connection to Finnhub (you will need an API key from Finnhub)
 const FINNHUB_WS_URL = process.env.URL;;
-const API_KEY = process.env.API_KEY; // Replace with your actual API key
+const API_KEY = process.env.API_KEY; 
 let socket = new WebSocket(`${FINNHUB_WS_URL}?token=${API_KEY}`);
 
 
-// Middleware to parse JSON
 app.use(express.json());
 
-// Store subscriptions to manage stock updates
-// const subscriptions = new Map<string, Set<express.Response>>();
 
 const subscriptions = new Map();
 const liveStockData = new Map();
 
-// WebSocket setup to handle incoming stock updates from Finnhub
 socket.on('open', () => {
   console.log('WebSocket connected');
   const initialStocks = ['BINANCE:BTCUSDT', 'BINANCE:ETHUSDT', 'BINANCE:BNBUSDT', 'BINANCE:ADAUSDT', 'BINANCE:SOLUSDT'];
@@ -43,8 +38,8 @@ socket.on('message', (data) => {
 
     if (message.type === 'trade' && message.data) {
       message.data.forEach((trade) => {
-        const { s: symbol, p: price } = trade; // Example fields: symbol and price
-        liveStockData.set(symbol, price); // Update the live price in your map
+        const { s: symbol, p: price } = trade;  
+        liveStockData.set(symbol, price); 
       });
     }
   } catch (error) {
@@ -65,15 +60,7 @@ socket.on('close', () => {
   }, 5000);
 });
 
-// var unsubscribe = function(symbol) {
-//   socket.send(JSON.stringify({'type':'unsubscribe','symbol': symbol}))
-// }
 
-// unsubscribe();
-
-
-
-// API Endpoint to get all stocks, ensuring there are at least 5
 app.get('/stocks', async (req, res) => {
   let stocks = await prisma.stock.findMany();
   console.log('Existing stocks:', stocks);
@@ -84,7 +71,6 @@ app.get('/stocks', async (req, res) => {
     const randomStocks = initialStocks.slice(stocks.length, 5);
 
     for (const stock of randomStocks) {
-      // Get the live price for the stock from the `liveStockData` Map
       const livePrice = liveStockData.get(stock);
       console.log('LiveStockData Map:', liveStockData);
 
@@ -100,8 +86,8 @@ app.get('/stocks', async (req, res) => {
           data: {
             ticker: stock,
             name: stock,
-            quantity: 1, // Random quantity
-            buyPrice: livePrice, // Use live price as buy price
+            quantity: 1, 
+            buyPrice: livePrice, 
           },
         });
       } catch (error) {
@@ -150,8 +136,6 @@ app.post('/stocks/subscribe', async (req, res) => {
       const subscribeMessage = { type: 'subscribe', symbol };
       socket.send(JSON.stringify(subscribeMessage));
     }
-
-    // Add this client (response) to the list of subscriptions for this symbol
     subscriptions.get(symbol)?.add(res);
 
     res.status(200).json({ message: `Subscribed to ${symbol} for live updates` });
@@ -173,7 +157,6 @@ app.post('/stocks/unsubscribe', async (req, res) => {
     if (subscriptions.has(symbol)) {
       subscriptions.get(symbol)?.delete(res);
       if (subscriptions.get(symbol)?.size === 0) {
-        // If no more clients are subscribed, unsubscribe from Finnhub WebSocket
         const unsubscribeMessage = { type: 'unsubscribe', symbol };
         socket.send(JSON.stringify(unsubscribeMessage));
         subscriptions.delete(symbol);
