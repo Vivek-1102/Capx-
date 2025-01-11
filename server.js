@@ -2,9 +2,12 @@ import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import WebSocket from 'ws';
 import dotenv from "dotenv";
+import cors from "cors";
 dotenv.config();
 
+app.use(cors());
 const app = express();
+const PORT = process.env.PORT || 3000;
 const prisma = new PrismaClient({
   log: ['query', 'info', 'warn', 'error'],
 });
@@ -57,6 +60,10 @@ socket.on('close', () => {
   setTimeout(() => {
     socket = new WebSocket(`${FINNHUB_WS_URL}?token=${API_KEY}`);
   }, 5000);
+});
+
+app.get('/', (req, res) => {
+  res.send('Hello from the backend!');
 });
 
 
@@ -270,6 +277,6 @@ app.get('/favicon.ico', (req, res) => res.status(204));
 
 
 // Start Express Server
-app.listen(process.env.PORT || 3000, function(){
+app.listen(PORT, function(){
   console.log("Express server listening on port %d in %s mode", this.address().port, app.settings.env);
 });
