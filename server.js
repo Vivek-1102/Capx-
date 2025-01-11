@@ -1,0 +1,290 @@
+import express from 'express';
+import { PrismaClient } from '@prisma/client';
+import WebSocket from 'ws';
+import dotenv from "dotenv";
+dotenv.config();
+
+const app = express();
+const PORT = 3000;
+const prisma = new PrismaClient({
+  log: ['query', 'info', 'warn', 'error'],
+});
+
+// WebSocket connection to Finnhub (you will need an API key from Finnhub)
+const FINNHUB_WS_URL = process.env.URL;;
+const API_KEY = process.env.API_KEY; // Replace with your actual API key
+let socket = new WebSocket(`${FINNHUB_WS_URL}?token=${API_KEY}`);
+
+
+// Middleware to parse JSON
+app.use(express.json());
+
+// Store subscriptions to manage stock updates
+// const subscriptions = new Map<string, Set<express.Response>>();
+
+const subscriptions = new Map();
+const liveStockData = new Map();
+
+// WebSocket setup to handle incoming stock updates from Finnhub
+socket.on('open', () => {
+  console.log('WebSocket connected');
+  const initialStocks = ['BINANCE:BTCUSDT', 'BINANCE:ETHUSDT', 'BINANCE:BNBUSDT', 'BINANCE:ADAUSDT', 'BINANCE:SOLUSDT'];
+  initialStocks.forEach((ticker) => {
+    const subscriptionMessage = JSON.stringify({ type: 'subscribe', symbol: ticker });
+    console.log('Sending:', subscriptionMessage);
+    socket.send(subscriptionMessage);
+  });
+});
+
+socket.on('message', (data) => {
+
+  try {
+    const message = JSON.parse(data);
+
+    if (message.type === 'trade' && message.data) {
+      message.data.forEach((trade) => {
+        const { s: symbol, p: price } = trade; // Example fields: symbol and price
+        liveStockData.set(symbol, price); // Update the live price in your map
+      });
+    }
+  } catch (error) {
+    console.error('Error parsing WebSocket message:', error);
+  }
+});
+
+
+
+socket.on('error', (err) => {
+  console.error('WebSocket Error:', err);
+});
+
+socket.on('close', () => {
+  console.log('WebSocket connection closed, attempting reconnection...');
+  setTimeout(() => {
+    socket = new WebSocket(`${FINNHUB_WS_URL}?token=${API_KEY}`);
+  }, 5000);
+});
+
+// var unsubscribe = function(symbol) {
+//   socket.send(JSON.stringify({'type':'unsubscribe','symbol': symbol}))
+// }
+
+// unsubscribe();
+
+
+
+// API Endpoint to get all stocks, ensuring there are at least 5
+app.get('/stocks', async (req, res) => {
+  let stocks = await prisma.stock.findMany();
+  console.log('Existing stocks:', stocks);
+
+  const initialStocks = ['BINANCE:BTCUSDT', 'BINANCE:ETHUSDT', 'BINANCE:BNBUSDT', 'BINANCE:ADAUSDT', 'BINANCE:SOLUSDT'];
+
+  if (stocks.length < 5) {
+    const randomStocks = initialStocks.slice(stocks.length, 5);
+
+    for (const stock of randomStocks) {
+      // Get the live price for the stock from the `liveStockData` Map
+      const livePrice = liveStockData.get(stock);
+      console.log('LiveStockData Map:', liveStockData);
+
+
+      if (!livePrice) {
+        console.error(`No live price available for stock: ${stock}. Skipping...`);
+        continue; // Skip if live price is not available
+      }
+
+      try {
+        // Create stock entry in the database
+        await prisma.stock.create({
+          data: {
+            ticker: stock,
+            name: stock,
+            quantity: 1, // Random quantity
+            buyPrice: livePrice, // Use live price as buy price
+          },
+        });
+      } catch (error) {
+        console.error(`Error creating stock for ticker ${stock}:`, error);
+      }
+    }
+
+    // Refetch the stocks after inserting new ones
+    stocks = await prisma.stock.findMany();
+  }
+
+  // Add live price data to the response
+  const stocksWithLiveData = stocks.map((stock) => {
+    const liveData = liveStockData.get(stock.ticker);
+    return {
+      ...stock,
+      liveData: liveData ? liveData : null, // Include live price if available
+    };
+  });
+
+  res.json(stocksWithLiveData);
+});
+
+
+// API Endpoint to subscribe a client to a stock symbol
+app.post('/stocks/subscribe', async (req, res) => {
+  const { symbol } = req.body;
+
+  if (!symbol) {
+    return res.status(400).json({ message: 'Stock symbol is required' });
+  }
+
+  try {
+    // Ensure the stock exists in the database
+    const stock = await prisma.stock.findUnique({
+      where: { ticker: symbol },
+    });
+
+    if (!stock) {
+      return res.status(404).json({ message: `Stock with ticker ${symbol} not found` });
+    }
+
+    // If the stock is not already subscribed to, subscribe via WebSocket
+    if (!subscriptions.has(symbol)) {
+      subscriptions.set(symbol, new Set());
+      const subscribeMessage = { type: 'subscribe', symbol };
+      socket.send(JSON.stringify(subscribeMessage));
+    }
+
+    // Add this client (response) to the list of subscriptions for this symbol
+    subscriptions.get(symbol)?.add(res);
+
+    res.status(200).json({ message: `Subscribed to ${symbol} for live updates` });
+  } catch (error) {
+    res.status(500).json({ message: 'Error subscribing to stock symbol', error });
+  }
+});
+
+// API Endpoint to unsubscribe a client from a stock symbol
+app.post('/stocks/unsubscribe', async (req, res) => {
+  const { symbol } = req.body;
+
+  if (!symbol) {
+    return res.status(400).json({ message: 'Stock symbol is required' });
+  }
+
+  try {
+    // Remove the client from the list of subscriptions
+    if (subscriptions.has(symbol)) {
+      subscriptions.get(symbol)?.delete(res);
+      if (subscriptions.get(symbol)?.size === 0) {
+        // If no more clients are subscribed, unsubscribe from Finnhub WebSocket
+        const unsubscribeMessage = { type: 'unsubscribe', symbol };
+        socket.send(JSON.stringify(unsubscribeMessage));
+        subscriptions.delete(symbol);
+      }
+    }
+
+    res.status(200).json({ message: `Unsubscribed from ${symbol}` });
+  } catch (error) {
+    res.status(500).json({ message: 'Error unsubscribing from stock symbol', error });
+  }
+});
+
+// API Endpoint to add a new stock
+app.post('/stocks', async (req, res) => {
+  const { ticker, name, quantity, buyPrice } = req.body;
+
+  if (!ticker || !name || !quantity || !buyPrice) {
+    return res.status(400).json({ message: 'Missing required fields' });
+  }
+
+  try {
+    const newStock = await prisma.stock.create({
+      data: {
+        ticker,
+        name,
+        quantity,
+        buyPrice,
+      },
+    });
+    res.status(201).json(newStock);
+  } catch (error) {
+    res.status(500).json({ message: 'Error adding stock', error });
+  }
+});
+
+// API Endpoint to delete a stock by its ticker
+app.delete('/stocks/sell', async (req, res) => {
+  const { ticker, quantityToSell } = req.body;
+
+  if (!ticker || !quantityToSell || quantityToSell <= 0) {
+    return res.status(400).json({ message: 'Invalid request. Provide ticker and valid quantity.' });
+  }
+
+  try {
+    const stock = await prisma.stock.findUnique({
+      where: { ticker },
+    });
+
+    if (!stock) {
+      return res.status(404).json({ message: `Stock with ticker ${ticker} not found` });
+    }
+
+    // Check if the user is selling more stock than they have
+    if (stock.quantity < quantityToSell) {
+      return res.status(400).json({ message: `Not enough stock available to sell. Current quantity: ${stock.quantity}` });
+    }
+
+    const updatedStock = await prisma.stock.update({
+      where: { ticker },
+      data: {
+        quantity: stock.quantity - quantityToSell,
+      },
+    });
+
+    // If quantity is zero, unsubscribe from receiving updates for that stock
+    if (updatedStock.quantity === 0 && subscriptions.has(ticker)) {
+      const unsubscribeMessage = { type: 'unsubscribe', symbol: ticker };
+      socket.send(JSON.stringify(unsubscribeMessage));
+      subscriptions.delete(ticker);
+    }
+
+    res.json({
+      message: `Successfully sold ${quantityToSell} shares of ${ticker}`,
+      updatedStock,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error selling stock', error });
+  }
+});
+
+// API Endpoint to buy a stock (update quantity)
+app.post('/stocks/buy', async (req, res) => {
+  const { ticker, quantityToBuy } = req.body;
+
+  if (!ticker || !quantityToBuy || quantityToBuy <= 0) {
+    return res.status(400).json({ message: 'Invalid request. Provide ticker and valid quantity.' });
+  }
+
+  try {
+    const stock = await prisma.stock.findUnique({
+      where: { ticker },
+    });
+
+    if (!stock) {
+      return res.status(404).json({ message: `Stock with ticker ${ticker} not found` });
+    }
+
+    const updatedStock = await prisma.stock.update({
+      where: { ticker },
+      data: {
+        quantity: stock.quantity + quantityToBuy,
+      },
+    });
+
+    res.json({ message: `Successfully bought ${quantityToBuy} shares of ${ticker}`, updatedStock });
+  } catch (error) {
+    res.status(500).json({ message: 'Error buying stock', error });
+  }
+});
+
+// Start Express Server
+app.listen(PORT, () => {
+  console.log(`Server running at http://localhost:${PORT}`);
+});
