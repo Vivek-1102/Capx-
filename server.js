@@ -72,7 +72,7 @@ function initializeFinnhubSocket() {
 
   finnhubSocket.on('close', () => {
     console.log('Finnhub WebSocket closed, attempting reconnection...');
-    setTimeout(initializeFinnhubSocket, 5000);
+    setTimeout(initializeFinnhubSocket, 5000); // Attempt to reconnect
   });
 }
 
@@ -131,7 +131,7 @@ function broadcastStockUpdate(symbol, price) {
 
   clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(update);
+      client.send(update); // Send the update to each connected client
     }
   });
 }
@@ -139,9 +139,12 @@ function broadcastStockUpdate(symbol, price) {
 // Handle stock subscription
 async function handleSubscription(symbol) {
   if (!subscribedStocks.has(symbol)) {
-    subscribedStocks.add(symbol);
+    subscribedStocks.add(symbol); // Add the stock to subscribed set
+
+    // Subscribe to the stock via Finnhub WebSocket
     if (finnhubSocket && finnhubSocket.readyState === WebSocket.OPEN) {
       finnhubSocket.send(JSON.stringify({ type: 'subscribe', symbol }));
+      console.log(`Subscribed to ${symbol}`);
     }
   }
 }
@@ -149,14 +152,17 @@ async function handleSubscription(symbol) {
 // Handle stock unsubscription
 async function handleUnsubscription(symbol) {
   if (subscribedStocks.has(symbol)) {
-    subscribedStocks.delete(symbol);
+    subscribedStocks.delete(symbol); // Remove from subscribed set
+
+    // Unsubscribe from the stock via Finnhub WebSocket
     if (finnhubSocket && finnhubSocket.readyState === WebSocket.OPEN) {
       finnhubSocket.send(JSON.stringify({ type: 'unsubscribe', symbol }));
+      console.log(`Unsubscribed from ${symbol}`);
     }
   }
 }
 
-// REST API endpoints remain the same...
+// REST API endpoints
 app.get('/favicon.ico', (req, res) => res.status(204));
 
 app.get('/', (req, res) => {
