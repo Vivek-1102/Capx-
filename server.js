@@ -4,6 +4,7 @@ import { WebSocketServer } from 'ws';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import http from 'http';
+import WebSocket from 'ws';
 
 dotenv.config();
 
@@ -42,14 +43,15 @@ function initializeFinnhubSocket() {
     console.log('Connected to Finnhub WebSocket');
     // Resubscribe to all stocks
     subscribedStocks.forEach((symbol) => {
-      const subscriptionMessage = JSON.stringify({ type: 'subscribe', symbol });
-      finnhubSocket.send(subscriptionMessage);
+      if (finnhubSocket) {
+        finnhubSocket.send(JSON.stringify({ type: 'subscribe', symbol }));
+      }
     });
   });
 
   finnhubSocket.on('message', (data) => {
     try {
-      const message = JSON.parse(data);
+      const message = JSON.parse(data.toString());
       if (message.type === 'trade' && message.data) {
         message.data.forEach((trade) => {
           const { s: symbol, p: price } = trade;
@@ -103,7 +105,7 @@ wss.on('connection', async (ws) => {
   // Handle messages from client
   ws.on('message', async (message) => {
     try {
-      const data = JSON.parse(message);
+      const data = JSON.parse(message.toString());
 
       switch (data.action) {
         case 'subscribe':
@@ -138,7 +140,7 @@ function broadcastStockUpdate(symbol, price) {
 async function handleSubscription(symbol) {
   if (!subscribedStocks.has(symbol)) {
     subscribedStocks.add(symbol);
-    if (finnhubSocket?.readyState === WebSocket.OPEN) {
+    if (finnhubSocket && finnhubSocket.readyState === WebSocket.OPEN) {
       finnhubSocket.send(JSON.stringify({ type: 'subscribe', symbol }));
     }
   }
@@ -148,19 +150,19 @@ async function handleSubscription(symbol) {
 async function handleUnsubscription(symbol) {
   if (subscribedStocks.has(symbol)) {
     subscribedStocks.delete(symbol);
-    if (finnhubSocket?.readyState === WebSocket.OPEN) {
+    if (finnhubSocket && finnhubSocket.readyState === WebSocket.OPEN) {
       finnhubSocket.send(JSON.stringify({ type: 'unsubscribe', symbol }));
     }
   }
 }
 
+// REST API endpoints remain the same...
 app.get('/favicon.ico', (req, res) => res.status(204));
 
-app.get('/',(req,res)=>{
-  res.send("Backend is up!");
-})
+app.get('/', (req, res) => {
+  res.send('Backend is up!');
+});
 
-// REST API endpoints
 app.get('/stocks', async (req, res) => {
   try {
     let stocks = await prisma.stock.findMany();
@@ -169,31 +171,33 @@ app.get('/stocks', async (req, res) => {
       const initialStocks = [
         'BINANCE:BTCUSDT', 'BINANCE:ETHUSDT',
         'BINANCE:BNBUSDT', 'BINANCE:ADAUSDT',
-        'BINANCE:SOLUSDT'
+        'BINANCE:SOLUSDT',
       ];
 
-      await Promise.all(initialStocks.slice(stocks.length).map(async (symbol) => {
-        const livePrice = liveStockData.get(symbol);
-        if (livePrice) {
-          await prisma.stock.create({
-            data: {
-              ticker: symbol,
-              name: symbol,
-              quantity: 1,
-              buyPrice: livePrice,
-            },
-          });
-          // Subscribe to the new stock
-          await handleSubscription(symbol);
-        }
-      }));
+      await Promise.all(
+        initialStocks.slice(stocks.length).map(async (symbol) => {
+          const livePrice = liveStockData.get(symbol);
+          if (livePrice) {
+            await prisma.stock.create({
+              data: {
+                ticker: symbol,
+                name: symbol,
+                quantity: 1,
+                buyPrice: livePrice,
+              },
+            });
+            // Subscribe to the new stock
+            await handleSubscription(symbol);
+          }
+        })
+      );
 
       stocks = await prisma.stock.findMany();
     }
 
-    const stocksWithLiveData = stocks.map(stock => ({
+    const stocksWithLiveData = stocks.map((stock) => ({
       ...stock,
-      livePrice: liveStockData.get(stock.ticker) || null
+      livePrice: liveStockData.get(stock.ticker) || null,
     }));
 
     res.json(stocksWithLiveData);
@@ -202,7 +206,6 @@ app.get('/stocks', async (req, res) => {
   }
 });
 
-// Buy stock endpoint
 app.post('/stocks/buy', async (req, res) => {
   const { ticker, quantityToBuy } = req.body;
 
@@ -222,7 +225,6 @@ app.post('/stocks/buy', async (req, res) => {
       data: { quantity: stock.quantity + quantityToBuy },
     });
 
-    // Ensure we're subscribed to this stock
     await handleSubscription(ticker);
 
     res.json({
@@ -234,7 +236,6 @@ app.post('/stocks/buy', async (req, res) => {
   }
 });
 
-// Sell stock endpoint
 app.post('/stocks/sell', async (req, res) => {
   const { ticker, quantityToSell } = req.body;
 
@@ -258,7 +259,6 @@ app.post('/stocks/sell', async (req, res) => {
       data: { quantity: stock.quantity - quantityToSell },
     });
 
-    // If no shares left, unsubscribe from updates
     if (updatedStock.quantity === 0) {
       await handleUnsubscription(ticker);
     }
@@ -271,8 +271,6 @@ app.post('/stocks/sell', async (req, res) => {
     res.status(500).json({ message: 'Error selling stock', error });
   }
 });
-
-
 
 // Start the server
 server.listen(PORT, () => {
