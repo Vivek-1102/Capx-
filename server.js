@@ -154,6 +154,12 @@ async function handleUnsubscription(symbol) {
   }
 }
 
+app.get('/favicon.ico', (req, res) => res.status(204));
+
+app.get('/',(req,res)=>{
+  res.send("Backend is up!");
+})
+
 // REST API endpoints
 app.get('/stocks', async (req, res) => {
   try {
@@ -266,7 +272,7 @@ app.post('/stocks/sell', async (req, res) => {
   }
 });
 
-app.get('/favicon.ico', (req, res) => res.status(204));
+
 
 // Start the server
 server.listen(PORT, () => {
